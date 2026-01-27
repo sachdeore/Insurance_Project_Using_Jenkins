@@ -1,0 +1,87 @@
+pipeline {
+    agent any
+
+    tools {
+        maven 'maven'
+    }
+
+    stages {
+
+        stage("Git Pull") {
+            steps {
+                git branch: 'main',
+                    url: 'https://github.com/sachdeore/Insurance_Project_Using_Jenkins.git'
+            }
+        }
+
+        stage("Compile") {
+            steps {
+                sh 'mvn clean compile'
+            }
+        }
+
+        stage("Package") {
+            steps {
+                sh 'mvn clean package -DskipTests'
+            }
+        }
+
+        stage("Build Docker Image") {
+            steps {
+                sh 'docker build -t insuree:latest .'
+                sh 'docker tag insuree:latest sachdeore/insuree:latest'
+            }
+        }
+
+        stage("Docker Login") {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'dockerhub-creds',
+                    usernameVariable: 'DOCKER_USER',
+                    passwordVariable: 'DOCKER_PASS'
+                )]) {
+                    sh '''
+                    echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
+                    '''
+                }
+            }
+        }
+
+        stage("Push Docker Image") {
+            steps {
+                sh 'docker push sachdeore/insuree:latest'
+            }
+        }
+
+        stage("Deploy to EKS") {
+            steps {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-creds'
+                ]]) {
+                    sh '''
+                    aws sts get-caller-identity
+
+                    aws eks update-kubeconfig \
+                    --region ap-south-1 \
+                    --name demo-ekscluster
+
+                    kubectl apply -f deployment-service.yaml
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Build + Docker Push + EKS Deploy SUCCESS!"
+        }
+        failure {
+            echo "Pipeline FAILED!"
+        }
+        always {
+            sh 'docker logout || true'
+        }
+    }
+}
